@@ -68,7 +68,7 @@ __global__ void argmax_pair_blocks_kernel(const ArgMaxPair *input, ArgMaxPair *b
 
     for (int32_t stride = blockDim.x / 2; stride > 0; stride /= 2) {
         if (threadIdx.x < stride && argmax_better(shared[threadIdx.x + stride], shared[threadIdx.x])) {
-            shared[threadIdx.x] = shared[.x + stride];
+            shared[threadIdx.x] = shared[threadIdx.x + stride];
         }
         __syncthreads();
     }
