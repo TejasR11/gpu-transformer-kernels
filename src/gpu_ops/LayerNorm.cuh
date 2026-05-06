@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../CudaBuffer.cuh"
+#include <cstdint>
 #include <memory>
 
 /**
@@ -8,6 +9,10 @@
  * Internally, uses float32 for all calculations, and only rounds back to bfloat16 at the end.
  */
 class LayerNorm {
+    std::shared_ptr<CudaBuffer> temp_space;
+    int32_t len{};
+    int32_t num_sum_blocks{};
+
 public:
     /// epsilon to add in denominator square root, for numerical stability
     static constexpr float EPS = 1.0e-6f;
