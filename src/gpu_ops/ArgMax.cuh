@@ -9,6 +9,8 @@
  */
 class ArgMax {
     std::shared_ptr<CudaBuffer> temp_space;
+    int32_t len{};
+    int32_t max_num_blocks{};
 public:
     /**
      * Initialize temporary space
