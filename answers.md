@@ -1,3 +1,5 @@
+## Part 1
+
 1) The BF16 FLOPS for non-tensor core reaches up to 39 TFLOPS, while the tensore core reaches speeds up to 312 TFLOPS. This means that the tensor core has speeds of up to 8x faster. 
 
 2) Although the tensore cores have 8x more TFLOPS, they are not necessarily faster for matrix-vector multiplications. Let's consider a matrix vector mulitplication:
@@ -43,3 +45,20 @@ SiLUMult:
 SiLUMult is another small kernel, although it does a little more work than RoPE. Nsight Compute shows `2.29%` compute throughput and `2.79%` memory throughput, again with a `Small Grid` warning. That means this kernel is also mostly limited by low parallelism and launch overhead rather than by the GPU's peak compute or memory bandwidth. Since it is just an elementwise fused activation and multiply, that is not too surprising.
 
 The memory screenshot shows simple global loads and stores with modest cache reuse (`30.83%` L1/TEX hit rate and `63.89%` L2 hit rate), and only about `54.40 KB` is read from device memory. The access pattern is straightforward, so there is not much evidence of bad memory coalescing. A reasonable optimization would be to fuse SiLU with surrounding feed-forward work so that the intermediate vectors do not need to be written and read as separate kernel steps. Like RoPE, this kernel is less important to optimize than matrix-vector multiply, since it touches far less data and does much less total work in the model.
+
+
+## Part 2
+
+### Question 2.1
+In one Qwen2 0.5B layer, the matrix-vector multiplies are:
+
+- `q_proj_weight @ attn_input`: matrix size `(896, 896)`
+- `k_proj_weight @ attn_input`: matrix size `(128, 896)`
+- `v_proj_weight @ attn_input`: matrix size `(128, 896)`
+- `o_proj_weight @ weighted_values`: matrix size `(896, 896)`
+- `gate_proj_weight @ ffn_input`: matrix size `(4864, 896)`
+- `up_proj_weight @ ffn_input`: matrix size `(4864, 896)`
+- `down_proj_weight @ ffn_hidden`: matrix size `(896, 4864)`
+
+I am not including the grouped-query attention operations because the question
+says not to include grouped-query attention.
