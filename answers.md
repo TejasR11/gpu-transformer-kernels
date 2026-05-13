@@ -50,15 +50,84 @@ The memory screenshot shows simple global loads and stores with modest cache reu
 ## Part 2
 
 ### Question 2.1
-In one Qwen2 0.5B layer, the matrix-vector multiplies are:
+In one Qwen2 0.5B layer, the attention projection matrix-vector multiplies are
+the query projection with matrix size (896, 896), the key projection with
+matrix size (128, 896), the value projection with matrix size (128, 896), and
+the attention output projection with matrix size (896, 896).
 
-- `q_proj_weight @ attn_input`: matrix size `(896, 896)`
-- `k_proj_weight @ attn_input`: matrix size `(128, 896)`
-- `v_proj_weight @ attn_input`: matrix size `(128, 896)`
-- `o_proj_weight @ weighted_values`: matrix size `(896, 896)`
-- `gate_proj_weight @ ffn_input`: matrix size `(4864, 896)`
-- `up_proj_weight @ ffn_input`: matrix size `(4864, 896)`
-- `down_proj_weight @ ffn_hidden`: matrix size `(896, 4864)`
+The feed-forward network has three matrix-vector multiplies. The gate
+projection and up projection both have matrix size (4864, 896), and the down
+projection has matrix size (896, 4864). I am not including the grouped-query
+attention operations because the question says not to include grouped-query
+attention.
 
-I am not including the grouped-query attention operations because the question
-says not to include grouped-query attention.
+### Question 2.2
+Qwen2 0.5B has 14 query heads, 2 key/value heads, and head size 64.
+Since there are only 2 key/value heads, each key head is shared by 7 query
+heads.
+
+So the grouped-query attention multiply can be viewed as two smaller matrix
+multiplies. For key/value head 0, the shape is (7, 64) times (64, 1234), which
+gives (7, 1234). For key/value head 1, the shape is the same: (7, 64) times
+(64, 1234), which gives another (7, 1234). Together, the attention score output
+has shape (14, 1234).
+
+### Question 2.3
+If off-chip memory bandwidth is the limiting factor, then the minimum latency
+is basically the time needed to read the model weights from GPU memory. Qwen2
+0.5B has about 0.5 billion parameters, and BF16 uses 2 bytes per parameter, so
+the weights are about 1.0 GB.
+
+The A100-PCIE-40GB has about 1555 GB/s of memory bandwidth. So the theoretical
+minimum latency is about 1.0 GB / 1555 GB/s, which is 0.00064 seconds, or about
+0.64 ms per generated token. This ignores compute time, kernel launch overhead,
+and KV cache traffic.
+
+### Question 2.4
+For each token, the KV cache stores keys and values for every layer. In Qwen2
+0.5B, there are 24 layers, 128 key values per layer, and 128 value values per
+layer. So each token needs 24 times (128 + 128) = 6144 BF16 numbers.
+
+Since BF16 uses 2 bytes, the KV cache is 6144 times 2 = 12288 bytes per token.
+The model has about 494 million parameters, so the BF16 weights are about
+988 MB. Ten percent of that is about 98.8 MB.
+
+So the sequence length is about 98.8 MB / 12288 bytes, which is about 8041
+tokens. Roughly, the KV cache becomes 10% of the model size at about 8000
+tokens.
+
+### Profiling
+Nsight Compute summary for the last-token profile:
+
+![Nsight Compute profile summary](image.png)
+
+The profile captures 100 kernels from the last-token range. My implementation
+launches about 20 kernels per Qwen2 layer, so this is about 5 layers total.
+The screenshot reports a total duration of about 1232.4 microseconds, so the
+implementation takes roughly:
+
+1232.4 microseconds / 5 layers = 246.5 microseconds per layer.
+
+The slowest part of the layer is the feed-forward network. The largest
+individual kernels are the matrix-vector multiplies for the gate, up, and down
+projections, which take about 50.69, 50.46, and 34.88 microseconds. This makes
+sense because these are the largest matrices in the layer.
+
+The attention part is smaller in this profile. Grouped-query attention takes
+about 21.86 microseconds for the main partial attention kernel and about 4.70
+microseconds for the finalization kernel. Since the sequence length is only 100
+tokens, attention does less total work than the feed-forward matrix-vector
+multiplies. For much longer sequences, I would expect attention to matter more
+because it scales with the KV cache length.
+
+Another thing I noticed is that the large matrix-vector kernels have much
+higher compute and memory throughput, around 70% for the gate and up
+projections. Smaller kernels like RoPE, LayerNorm, SiLU, and residual adds have
+low throughput. These small kernels are mostly limited by launch overhead and
+small grid sizes rather than by the peak compute capability of the GPU.
+
+The memory workload chart for one of the smaller kernels also supports this.
+It shows very little device memory traffic, only a few KB, and a high L2 cache
+hit rate of about 88.6%. That means this kernel is not really limited by global
+memory bandwidth. It is more likely limited by the fact that the kernel is
+small and does not have enough work to fully use the GPU.
